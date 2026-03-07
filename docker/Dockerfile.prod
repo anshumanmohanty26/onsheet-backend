@@ -11,12 +11,14 @@ RUN node_modules/.bin/prisma generate
 
 # ── Stage 2: Compile TypeScript ────────────────────────────────────────────────
 FROM node:20-alpine AS builder
+RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN node_modules/.bin/nest build
+RUN pnpm build
+RUN test -f dist/main.js || (echo "ERROR: dist/main.js not found — build failed" && exit 1)
 
 # ── Stage 3: Production runtime ────────────────────────────────────────────────
 FROM node:20-alpine AS runner
@@ -34,4 +36,4 @@ COPY package.json ./
 
 # Cloud Run injects PORT automatically — app reads process.env.PORT
 # Run prisma migrate deploy then start the server
-CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/main"]
+CMD ["sh", "-c", "node node_modules/.bin/prisma migrate deploy && node dist/main"]
