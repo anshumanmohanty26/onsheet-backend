@@ -27,9 +27,9 @@ export class AuthController {
 	@Public()
 	@Post("register")
 	async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-		const tokens = await this.authService.register(dto);
+		const { tokens, user } = await this.authService.register(dto);
 		this.authService.attachCookies(res, tokens);
-		return tokens;
+		return user;
 	}
 
 	@Public()
@@ -38,9 +38,9 @@ export class AuthController {
 	@Post("login")
 	async login(@Request() req: Req, @Res({ passthrough: true }) res: Response) {
 		if (!req.user) throw new UnauthorizedException();
-		const tokens = await this.authService.login(req.user);
+		const { tokens, user } = await this.authService.login(req.user);
 		this.authService.attachCookies(res, tokens);
-		return tokens;
+		return user;
 	}
 
 	@Public()
@@ -51,7 +51,6 @@ export class AuthController {
 		if (!req.user) throw new UnauthorizedException();
 		const tokens = await this.authService.refreshTokens(req.user);
 		this.authService.attachCookies(res, tokens);
-		return tokens;
 	}
 
 	@HttpCode(HttpStatus.NO_CONTENT)

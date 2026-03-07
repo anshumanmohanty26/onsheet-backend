@@ -10,6 +10,8 @@ export const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 export const cookieBase = (secure: boolean) =>
 	({
 		httpOnly: true,
-		sameSite: "lax" as const,
+		// sameSite:"none" is required for cross-origin requests (frontend and
+		// backend are on different domains in production). Requires secure:true.
+		sameSite: (secure ? "none" : "lax") as "none" | "lax",
 		secure,
 	}) as const;

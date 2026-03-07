@@ -34,7 +34,8 @@ export class AuthService {
 
 		const tokens = await this.generateTokens(user.id, user.email);
 		await this.storeRefreshToken(user.id, tokens.refreshToken);
-		return tokens;
+		const { passwordHash: _ph, refreshToken: _rt, ...safeUser } = user;
+		return { tokens, user: safeUser };
 	}
 
 	async validateUser(email: string, password: string) {
@@ -49,7 +50,7 @@ export class AuthService {
 	async login(user: Express.User) {
 		const tokens = await this.generateTokens(user.id, user.email);
 		await this.storeRefreshToken(user.id, tokens.refreshToken);
-		return tokens;
+		return { tokens, user };
 	}
 
 	async refreshTokens(user: Express.User) {
@@ -80,8 +81,10 @@ export class AuthService {
 	}
 
 	clearCookies(res: Response): void {
-		res.clearCookie(ACCESS_COOKIE);
-		res.clearCookie(REFRESH_COOKIE, { path: "/api/v1/auth" });
+		const secure = this.config.get<string>("app.nodeEnv") === "production";
+		const base = cookieBase(secure);
+		res.clearCookie(ACCESS_COOKIE, base);
+		res.clearCookie(REFRESH_COOKIE, { ...base, path: "/api/v1/auth" });
 	}
 
 	// ── Private helpers ──────────────────────────────────────────────────────────
