@@ -14,7 +14,8 @@ import { ImportProcessor } from './processors/import.processor';
         connection: {
           host: config.get<string>('redis.host'),
           port: config.get<number>('redis.port'),
-          password: config.get<string>('redis.password'),
+          password: config.get<string | undefined>('redis.password'),
+          tls: config.get<object | undefined>('redis.tls'),
         },
       }),
       inject: [ConfigService],

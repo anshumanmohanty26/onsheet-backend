@@ -31,8 +31,10 @@ export class RedisIoAdapter extends IoAdapter {
   async connectToRedis(): Promise<void> {
     const host = this.config.get<string>('redis.host') ?? 'localhost';
     const port = this.config.get<number>('redis.port') ?? 6379;
+    const password = this.config.get<string | undefined>('redis.password');
+    const tls = this.config.get<object | undefined>('redis.tls');
 
-    const pubClient = new Redis({ host, port, lazyConnect: true });
+    const pubClient = new Redis({ host, port, password, tls: tls as any, lazyConnect: true });
     const subClient = pubClient.duplicate();
 
     pubClient.on('error', (err) => this.logger.error(`Redis pub error: ${err.message}`));

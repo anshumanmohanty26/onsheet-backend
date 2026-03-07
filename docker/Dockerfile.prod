@@ -1,0 +1,37 @@
+# ── Stage 1: Install dependencies ─────────────────────────────────────────────
+FROM node:20-alpine AS deps
+RUN corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+
+RUN pnpm install --frozen-lockfile
+RUN node_modules/.bin/prisma generate
+
+# ── Stage 2: Compile TypeScript ────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+RUN node_modules/.bin/nest build
+
+# ── Stage 3: Production runtime ────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# Copy all node_modules (includes prisma CLI + generated client)
+COPY --from=deps /app/node_modules ./node_modules
+# Copy compiled app
+COPY --from=builder /app/dist ./dist
+# Copy prisma schema (needed for migrate deploy at startup)
+COPY prisma ./prisma
+COPY package.json ./
+
+# Cloud Run injects PORT automatically — app reads process.env.PORT
+# Run prisma migrate deploy then start the server
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/main"]

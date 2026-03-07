@@ -1,0 +1,94 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      REGION: us-central1
+      SERVICE: onsheet-backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set image URL
+        id: image
+        run: echo "url=us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/onsheet/backend" >> $GITHUB_OUTPUT
+
+      - name: Create Artifact Registry repository (idempotent)
+        run: |
+          gcloud artifacts repositories describe onsheet \
+            --location=$REGION --project=${{ secrets.GCP_PROJECT_ID }} 2>/dev/null \
+          || gcloud artifacts repositories create onsheet \
+            --repository-format=docker \
+            --location=$REGION \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --description="OnSheet container images"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ steps.image.outputs.url }}:${{ github.sha }}
+            ${{ steps.image.outputs.url }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          image: ${{ steps.image.outputs.url }}:${{ github.sha }}
+          region: ${{ env.REGION }}
+          env_vars: |-
+            NODE_ENV=production
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            REDIS_URL=${{ secrets.REDIS_URL }}
+            JWT_ACCESS_SECRET=${{ secrets.JWT_ACCESS_SECRET }}
+            JWT_ACCESS_EXPIRES_IN=${{ secrets.JWT_ACCESS_EXPIRES_IN }}
+            JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+            JWT_REFRESH_EXPIRES_IN=${{ secrets.JWT_REFRESH_EXPIRES_IN }}
+            GOOGLE_VERTEX_AI_API_KEY=${{ secrets.GOOGLE_VERTEX_AI_API_KEY }}
+            GOOGLE_CLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT }}
+            GOOGLE_VERTEX_AI_LOCATION=${{ secrets.GOOGLE_VERTEX_AI_LOCATION }}
+            GEMINI_MODEL=${{ secrets.GEMINI_MODEL }}
+            CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
+            CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
+            CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
+            FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+          flags: >-
+            --allow-unauthenticated
+            --min-instances=0
+            --max-instances=3
+            --memory=512Mi
+            --cpu=1
+            --timeout=60
+
+      - name: Show deployed URL
+        run: echo "Live at ${{ steps.deploy.outputs.url }}"
