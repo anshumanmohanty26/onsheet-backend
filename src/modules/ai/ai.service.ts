@@ -416,11 +416,13 @@ export class AiService {
     const apiKey = config.get<string>('ai.apiKey');
     const location = config.get<string>('ai.location') ?? 'us-central1';
     const model = config.get<string>('ai.model') ?? 'gemini-2.5-pro';
+    const project = config.get<string>('ai.project');
 
     this.llm = new ChatVertexAI({
       model,
       location,
       temperature: 0,
+      ...(project ? { project } : {}),
       ...(apiKey ? { authOptions: { apiKey } } : {}),
     });
 

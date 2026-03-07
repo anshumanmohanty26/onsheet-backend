@@ -88,7 +88,7 @@ jobs:
             --max-instances=3
             --memory=512Mi
             --cpu=1
-            --timeout=60
+            --timeout=300
 
       - name: Show deployed URL
         run: echo "Live at ${{ steps.deploy.outputs.url }}"
