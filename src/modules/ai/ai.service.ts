@@ -1,23 +1,13 @@
-import type {
-	AIMessage,
-	BaseMessage,
-	ToolMessage,
-} from "@langchain/core/messages";
+import type { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { ChatVertexAI } from "@langchain/google-vertexai";
-import {
-	Annotation,
-	END,
-	MessagesAnnotation,
-	START,
-	StateGraph,
-} from "@langchain/langgraph";
+import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { Injectable, Logger } from "@nestjs/common";
-import type { ConfigService } from "@nestjs/config";
+import { ConfigService } from "@nestjs/config";
 import { z } from "zod";
-import type { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../prisma/prisma.service";
 import type { AgentQueryDto } from "./dto/agent-query.dto";
 import type { AiQueryDto } from "./dto/ai-query.dto";
 
@@ -117,10 +107,8 @@ function createSheetTools(prisma: PrismaService) {
 			colEnd?: number;
 		}) => {
 			const where: Record<string, unknown> = { sheetId };
-			if (rowStart !== undefined)
-				where.row = { gte: rowStart, lte: rowEnd ?? 9999 };
-			if (colStart !== undefined)
-				where.col = { gte: colStart, lte: colEnd ?? 702 };
+			if (rowStart !== undefined) where.row = { gte: rowStart, lte: rowEnd ?? 9999 };
+			if (colStart !== undefined) where.col = { gte: colStart, lte: colEnd ?? 702 };
 
 			const cells = await prisma.cell.findMany({
 				where,
@@ -143,22 +131,10 @@ function createSheetTools(prisma: PrismaService) {
 				"Fetch cell data from a sheet. Returns row/col (0-indexed), rawValue (user input or formula), and computed (evaluated display value). Filter by row/column range. Max 500 cells returned.",
 			schema: z.object({
 				sheetId: z.string().describe("The sheet ID to fetch cells from"),
-				rowStart: z
-					.number()
-					.optional()
-					.describe("First row to include (0-indexed, inclusive)"),
-				rowEnd: z
-					.number()
-					.optional()
-					.describe("Last row to include (0-indexed, inclusive)"),
-				colStart: z
-					.number()
-					.optional()
-					.describe("First column to include (0-indexed, inclusive)"),
-				colEnd: z
-					.number()
-					.optional()
-					.describe("Last column to include (0-indexed, inclusive)"),
+				rowStart: z.number().optional().describe("First row to include (0-indexed, inclusive)"),
+				rowEnd: z.number().optional().describe("Last row to include (0-indexed, inclusive)"),
+				colStart: z.number().optional().describe("First column to include (0-indexed, inclusive)"),
+				colEnd: z.number().optional().describe("Last column to include (0-indexed, inclusive)"),
 			}),
 		},
 	);
@@ -212,20 +188,9 @@ function createSheetTools(prisma: PrismaService) {
 				select: { row: true, col: true, rawValue: true, computed: true },
 			});
 
-			const errorMarkers = [
-				"#VALUE!",
-				"#REF!",
-				"#NAME?",
-				"#DIV/0!",
-				"#NUM!",
-				"#N/A",
-				"#NULL!",
-			];
+			const errorMarkers = ["#VALUE!", "#REF!", "#NAME?", "#DIV/0!", "#NUM!", "#N/A", "#NULL!"];
 			const errors = formulas
-				.filter(
-					(c) =>
-						c.computed && errorMarkers.some((m) => c.computed?.includes(m)),
-				)
+				.filter((c) => c.computed && errorMarkers.some((m) => c.computed?.includes(m)))
 				.map((c) => ({
 					row: c.row,
 					col: c.col,
@@ -361,13 +326,7 @@ function createSheetTools(prisma: PrismaService) {
 		},
 	);
 
-	return [
-		sheetCellsTool,
-		sheetStatsTool,
-		formulaErrorTool,
-		cellHistoryTool,
-		dataAnomalyTool,
-	];
+	return [sheetCellsTool, sheetStatsTool, formulaErrorTool, cellHistoryTool, dataAnomalyTool];
 }
 
 // ── Graph factory ─────────────────────────────────────────────────────────────
@@ -404,9 +363,7 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService) {
 	 * with `tool_calls`; the conditional edge then routes to the tools node.
 	 * If no tool calls are present the edge routes to the synthesizer.
 	 */
-	const plannerNode = async (
-		state: SheetAgentState,
-	): Promise<Partial<SheetAgentState>> => {
+	const plannerNode = async (state: SheetAgentState): Promise<Partial<SheetAgentState>> => {
 		const response = await llmWithTools.invoke([
 			new SystemMessage(PLANNER_SYSTEM),
 			...state.messages,
@@ -420,13 +377,8 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService) {
 	 * Receives the complete message history (user query + all tool results from
 	 * previous planner iterations) and composes a final structured answer.
 	 */
-	const synthesizerNode = async (
-		state: SheetAgentState,
-	): Promise<Partial<SheetAgentState>> => {
-		const response = await llm.invoke([
-			new SystemMessage(SYNTHESIZER_SYSTEM),
-			...state.messages,
-		]);
+	const synthesizerNode = async (state: SheetAgentState): Promise<Partial<SheetAgentState>> => {
+		const response = await llm.invoke([new SystemMessage(SYNTHESIZER_SYSTEM), ...state.messages]);
 		return { messages: [response] };
 	};
 
@@ -436,9 +388,7 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService) {
 	 * Routes to `'tools'` when the last AI message contains tool calls,
 	 * or to `'synthesizer'` when the planner has gathered enough information.
 	 */
-	const routeAfterPlanner = (
-		state: SheetAgentState,
-	): "tools" | "synthesizer" => {
+	const routeAfterPlanner = (state: SheetAgentState): "tools" | "synthesizer" => {
 		const lastMsg = state.messages.at(-1);
 		const toolCalls = (lastMsg as AIMessage | undefined)?.tool_calls;
 		return toolCalls && toolCalls.length > 0 ? "tools" : "synthesizer";
@@ -515,15 +465,11 @@ export class AiService {
 	 * @returns Final answer string and a deduplicated list of tool names used.
 	 */
 	async runAgent(dto: AgentQueryDto): Promise<AgentResult> {
-		this.logger.log(
-			`[agent] sheetId=${dto.sheetId} query="${dto.query.slice(0, 80)}"`,
-		);
+		this.logger.log(`[agent] sheetId=${dto.sheetId} query="${dto.query.slice(0, 80)}"`);
 
 		const result = await this.graph.invoke(
 			{
-				messages: [
-					new HumanMessage(`Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`),
-				],
+				messages: [new HumanMessage(`Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`)],
 				toolsUsed: [],
 			},
 			{ recursionLimit: 15 },
@@ -532,9 +478,7 @@ export class AiService {
 		const messages: BaseMessage[] = result.messages;
 		const lastMsg = messages.at(-1);
 		const answer =
-			typeof lastMsg?.content === "string"
-				? lastMsg.content
-				: JSON.stringify(lastMsg?.content);
+			typeof lastMsg?.content === "string" ? lastMsg.content : JSON.stringify(lastMsg?.content);
 
 		const toolsUsed = [
 			...new Set(
@@ -568,8 +512,7 @@ export class AiService {
 			new HumanMessage(userContent),
 		]);
 
-		const formula =
-			typeof response.content === "string" ? response.content.trim() : "";
+		const formula = typeof response.content === "string" ? response.content.trim() : "";
 		return { formula };
 	}
 
@@ -594,8 +537,7 @@ export class AiService {
 			new HumanMessage(userContent),
 		]);
 
-		const analysis =
-			typeof response.content === "string" ? response.content.trim() : "";
+		const analysis = typeof response.content === "string" ? response.content.trim() : "";
 		return { analysis };
 	}
 }
