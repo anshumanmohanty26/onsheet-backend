@@ -40,12 +40,23 @@ async function bootstrap() {
 	app.setGlobalPrefix("api/v1");
 
 	const frontendUrl = process.env.FRONTEND_URL;
+	// Allow both exact FRONTEND_URL and its www/non-www counterpart so that
+	// naked-domain ↔ www redirects never cause CORS failures.
+	const extraOrigins: string[] = [];
+	if (frontendUrl) {
+		const url = new URL(frontendUrl);
+		if (url.hostname.startsWith("www.")) {
+			extraOrigins.push(`${url.protocol}//${url.hostname.slice(4)}`);
+		} else {
+			extraOrigins.push(`${url.protocol}//www.${url.hostname}`);
+		}
+	}
 	const allowedOrigins =
 		process.env.NODE_ENV === "production"
 			? frontendUrl
-				? [frontendUrl]
+				? [frontendUrl, ...extraOrigins]
 				: []
-			: ["http://localhost:3000", ...(frontendUrl ? [frontendUrl] : [])];
+			: ["http://localhost:3000", ...(frontendUrl ? [frontendUrl, ...extraOrigins] : [])];
 
 	app.enableCors({
 		origin: allowedOrigins,
