@@ -1,0 +1,73 @@
+services:
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: onsheet_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: onsheet
+      POSTGRES_PASSWORD: onsheet_pass
+      POSTGRES_DB: onsheet_db
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onsheet -d onsheet_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis 7 ───────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: onsheet_redis_dev
+    restart: unless-stopped
+    command: redis-server --loglevel warning
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── NestJS API (dev — hot reload via nest start --watch) ──────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: onsheet_api_dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://onsheet:onsheet_pass@postgres:5432/onsheet_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      # Mount the entire source so file changes trigger hot reload
+      - .:/app
+      # Preserve the container's node_modules (don't overwrite with host's)
+      - /app/node_modules
+      # Preserve generated prisma client
+      - /app/node_modules/.prisma
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Run migrations then start in watch mode
+    command: >
+      sh -c "
+        ./node_modules/.bin/prisma migrate deploy &&
+        pnpm start:dev
+      "
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:

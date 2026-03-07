@@ -1,0 +1,180 @@
+// OnSheet — Google Sheets clone
+// Prisma schema for PostgreSQL 16 with pg adapter
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ──────────────────────────────────────────────────────────────────
+
+enum PermissionRole {
+  VIEWER
+  COMMENTER
+  EDITOR
+  OWNER
+}
+
+enum OpType {
+  UPDATE
+  CLEAR
+  STYLE
+  INSERT_ROW
+  DELETE_ROW
+  INSERT_COL
+  DELETE_COL
+}
+
+// ── Models ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  avatarUrl    String?
+  refreshToken String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workbooks    Workbook[]
+  permissions  Permission[]
+  cellOps      CellOperation[]
+  snapshots    SheetSnapshot[]
+  comments     CellComment[]
+
+  @@map("users")
+}
+
+model Workbook {
+  id           String   @id @default(cuid())
+  name         String
+  ownerId      String
+  shareToken   String?  @unique @default(cuid())
+  publicAccess Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  owner       User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sheets      Sheet[]
+  permissions Permission[]
+
+  @@index([ownerId])
+  @@map("workbooks")
+}
+
+model Sheet {
+  id         String   @id @default(cuid())
+  workbookId String
+  name       String
+  index      Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  workbook   Workbook        @relation(fields: [workbookId], references: [id], onDelete: Cascade)
+  cells      Cell[]
+  cellOps    CellOperation[]
+  snapshots  SheetSnapshot[]
+  comments   CellComment[]
+
+  @@unique([workbookId, index])
+  @@index([workbookId])
+  @@map("sheets")
+}
+
+model Cell {
+  id        String   @id @default(cuid())
+  sheetId   String
+  row       Int
+  col       Int
+  rawValue  String?
+  computed  String?
+  formatted String?
+  style     Json     @default("{}")
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sheet   Sheet           @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  cellOps CellOperation[]
+
+  @@unique([sheetId, row, col])
+  @@index([sheetId])
+  @@map("cells")
+}
+
+model CellOperation {
+  id        String   @id @default(cuid())
+  cellId    String?
+  sheetId   String
+  row       Int
+  col       Int
+  userId    String
+  version   Int
+  type      OpType
+  oldValue  String?
+  newValue  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  cell   Cell?   @relation(fields: [cellId], references: [id], onDelete: SetNull)
+  sheet  Sheet   @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sheetId, createdAt(sort: Desc)])
+  @@index([sheetId, row, col])
+  @@map("cell_operations")
+}
+
+model Permission {
+  id         String         @id @default(cuid())
+  workbookId String
+  userId     String
+  role       PermissionRole
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  workbook Workbook @relation(fields: [workbookId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workbookId, userId])
+  @@index([workbookId])
+  @@map("permissions")
+}
+
+model SheetSnapshot {
+  id        String   @id @default(cuid())
+  sheetId   String
+  name      String   @default("Autosave")
+  cells     Json
+  createdAt DateTime @default(now())
+  createdBy String
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([sheetId, createdAt(sort: Desc)])
+  @@map("sheet_snapshots")
+}
+
+model CellComment {
+  id        String   @id @default(cuid())
+  sheetId   String
+  row       Int
+  col       Int
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+
+  sheet Sheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([sheetId])
+  @@map("cell_comments")
+}
