@@ -1,4 +1,4 @@
-import { registerAs } from '@nestjs/config';
+import { registerAs } from "@nestjs/config";
 
 /**
  * Cloudinary configuration.
@@ -8,13 +8,13 @@ import { registerAs } from '@nestjs/config';
  *
  * @see https://cloudinary.com/documentation/node_integration
  */
-export default registerAs('cloudinary', () => ({
-  /** Cloudinary cloud name (displayed in the dashboard URL). */
-  cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+export default registerAs("cloudinary", () => ({
+	/** Cloudinary cloud name (displayed in the dashboard URL). */
+	cloudName: process.env.CLOUDINARY_CLOUD_NAME,
 
-  /** Cloudinary API key. */
-  apiKey: process.env.CLOUDINARY_API_KEY,
+	/** Cloudinary API key. */
+	apiKey: process.env.CLOUDINARY_API_KEY,
 
-  /** Cloudinary API secret. Keep this server-side only — never expose to clients. */
-  apiSecret: process.env.CLOUDINARY_API_SECRET,
+	/** Cloudinary API secret. Keep this server-side only — never expose to clients. */
+	apiSecret: process.env.CLOUDINARY_API_SECRET,
 }));

@@ -1,8 +1,8 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from "class-validator";
 
 export class CreateSnapshotDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  name?: string;
+	@IsOptional()
+	@IsString()
+	@MaxLength(200)
+	name?: string;
 }

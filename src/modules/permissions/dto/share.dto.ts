@@ -1,10 +1,10 @@
-import { PermissionRole } from '@prisma/client';
-import { IsEmail, IsEnum } from 'class-validator';
+import { PermissionRole } from "@prisma/client";
+import { IsEmail, IsEnum } from "class-validator";
 
 export class ShareDto {
-  @IsEmail()
-  email: string;
+	@IsEmail()
+	email: string;
 
-  @IsEnum(PermissionRole)
-  role: PermissionRole;
+	@IsEnum(PermissionRole)
+	role: PermissionRole;
 }
