@@ -2,9 +2,9 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
 import { PrismaModule } from "../../prisma/prisma.module";
+import { AI_REDIS } from "./ai.constants";
 import { AiController } from "./ai.controller";
 import { AiService } from "./ai.service";
-import { AI_REDIS } from "./ai.constants";
 
 export { AI_REDIS };
 
@@ -27,7 +27,8 @@ export { AI_REDIS };
 					port: config.get<number>("redis.port") ?? 6379,
 					password: config.get<string | undefined>("redis.password"),
 					tls: config.get<object | undefined>("redis.tls") as
-						import("node:tls").ConnectionOptions | undefined,
+						| import("node:tls").ConnectionOptions
+						| undefined,
 					lazyConnect: true,
 					enableOfflineQueue: false,
 				}),

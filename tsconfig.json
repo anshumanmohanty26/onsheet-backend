@@ -1,14 +1,15 @@
 {
 	"compilerOptions": {
 		"module": "commonjs",
-		"moduleResolution": "node",
+		"moduleResolution": "node10",
+		"ignoreDeprecations": "6.0",
 		"esModuleInterop": true,
 		"declaration": true,
 		"removeComments": true,
 		"emitDecoratorMetadata": true,
 		"experimentalDecorators": true,
 		"allowSyntheticDefaultImports": true,
-		"target": "ES2023",
+		"target": "ES2024",
 		"sourceMap": true,
 		"rootDir": "src",
 		"outDir": "./dist",

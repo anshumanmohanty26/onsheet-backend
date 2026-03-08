@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ConflictException, Logger } from "@nestjs/common";
+import { ConflictException, Inject, Logger, forwardRef } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import {
@@ -51,7 +51,7 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	// socketId → { sheetId, userId, displayName }
 	private readonly socketMeta = new Map<
 		string,
-		{ sheetId: string; userId: string; displayName: string }
+		{ sheetId: string; workbookId: string | null; userId: string; displayName: string }
 	>();
 
 	// Write-batch buffer keyed by sheetId
@@ -60,7 +60,7 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
 	constructor(
 		private readonly collabService: CollabService,
-		private readonly cellsService: CellsService,
+		@Inject(forwardRef(() => CellsService)) private readonly cellsService: CellsService,
 		private readonly jwtService: JwtService,
 		private readonly config: ConfigService,
 		private readonly usersService: UsersService,
@@ -126,6 +126,9 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		if (meta) {
 			this.collabService.leave(meta.sheetId, client.id);
 			client.to(meta.sheetId).emit("user:left", { socketId: client.id });
+			if (meta.workbookId) {
+				client.leave(`workbook:${meta.workbookId}`);
+			}
 			this.socketMeta.delete(client.id);
 		}
 		this.logger.log(`Disconnected: ${client.id}`);
@@ -134,7 +137,12 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	@SubscribeMessage("sheet:join")
 	async handleJoin(
 		@ConnectedSocket() client: Socket,
-		@MessageBody() payload: { sheetId: string; displayName?: string; sinceVersion?: number },
+		@MessageBody() payload: {
+			sheetId: string;
+			workbookId?: string;
+			displayName?: string;
+			sinceVersion?: number;
+		},
 	) {
 		const userId: string = client.data.isGuest
 			? (client.data.guestId as string)
@@ -144,12 +152,20 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			: (((client.data.user?.displayName ?? client.data.user?.email) as string) ?? "User");
 
 		client.join(payload.sheetId);
+		if (payload.workbookId) {
+			client.join(`workbook:${payload.workbookId}`);
+		}
 		const users = this.collabService.join(payload.sheetId, {
 			userId,
 			displayName,
 			socketId: client.id,
 		});
-		this.socketMeta.set(client.id, { sheetId: payload.sheetId, userId, displayName });
+		this.socketMeta.set(client.id, {
+			sheetId: payload.sheetId,
+			workbookId: payload.workbookId ?? null,
+			userId,
+			displayName,
+		});
 		client.to(payload.sheetId).emit("user:joined", users);
 		client.emit("sheet:users", users);
 
@@ -255,6 +271,15 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		const deduped = new Map<string, PendingWrite>();
 		for (const w of writes) {
 			deduped.set(cellKey(w), w);
+		}
+
+		// Resolve promises for writes that were deduplicated out (same cell,
+		// earlier arrival) so we don't accumulate pending Promises.  The losing
+		// client will receive the authoritative value via the room broadcast below.
+		for (const w of writes) {
+			if (deduped.get(cellKey(w)) !== w) {
+				w.resolve(undefined);
+			}
 		}
 
 		for (const write of deduped.values()) {

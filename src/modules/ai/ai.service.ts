@@ -9,9 +9,9 @@ import { ConfigService } from "@nestjs/config";
 import type Redis from "ioredis";
 import { z } from "zod";
 import { PrismaService } from "../../prisma/prisma.service";
+import { AI_REDIS } from "./ai.constants";
 import type { AgentQueryDto } from "./dto/agent-query.dto";
 import type { AiQueryDto } from "./dto/ai-query.dto";
-import { AI_REDIS } from "./ai.constants";
 
 // ── Agent result ──────────────────────────────────────────────────────────────
 
@@ -399,10 +399,11 @@ function createSheetTools(prisma: PrismaService, userId: string) {
 				success: true,
 				cellsWritten: capped.length,
 				_action: { type: "SET_CELLS", cells: actionCells } satisfies AgentAction,
-				summary: capped
-					.slice(0, 5)
-					.map((c) => `${toA1(c.row, c.col)}=${c.value}`)
-					.join(", ") + (capped.length > 5 ? ` ... and ${capped.length - 5} more` : ""),
+				summary:
+					capped
+						.slice(0, 5)
+						.map((c) => `${toA1(c.row, c.col)}=${c.value}`)
+						.join(", ") + (capped.length > 5 ? ` ... and ${capped.length - 5} more` : ""),
 			});
 		},
 		{
@@ -502,8 +503,7 @@ function createSheetTools(prisma: PrismaService, userId: string) {
 		},
 		{
 			name: "add_comment",
-			description:
-				"Add a comment to a specific cell. Row and col are 0-indexed.",
+			description: "Add a comment to a specific cell. Row and col are 0-indexed.",
 			schema: z.object({
 				sheetId: z.string().describe("The sheet ID"),
 				row: z.number().int().min(0).describe("Cell row (0-indexed)"),
@@ -548,7 +548,10 @@ function createSheetTools(prisma: PrismaService, userId: string) {
  * @param prisma - Prisma client for live DB access inside tools.
  */
 /** Per-userId cache of bound tool sets. Avoids re-calling llm.bindTools on every request. */
-const toolsCache = new Map<string, { llmWithTools: ReturnType<ChatVertexAI["bindTools"]>; toolsNode: ToolNode }>();
+const toolsCache = new Map<
+	string,
+	{ llmWithTools: ReturnType<ChatVertexAI["bindTools"]>; toolsNode: ToolNode }
+>();
 
 function buildSheetAgentGraph(
 	llm: ChatVertexAI,
@@ -685,7 +688,9 @@ export class AiService {
 			...baseOpts,
 		});
 
-		this.logger.log(`OnSheet AI agent ready — planner: ${model}, synthesizer: gemini-2.5-flash @ ${location}`);
+		this.logger.log(
+			`OnSheet AI agent ready — planner: ${model}, synthesizer: gemini-2.5-flash @ ${location}`,
+		);
 	}
 
 	/**

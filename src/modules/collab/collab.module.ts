@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { CellsModule } from "../cells/cells.module";
@@ -10,11 +10,12 @@ import { OperationLogModule } from "./operation-log.module";
 @Module({
 	imports: [
 		PrismaModule,
-		CellsModule,
+		forwardRef(() => CellsModule),
 		UsersModule,
 		OperationLogModule,
 		JwtModule.register({}), // secrets resolved at verify-time via ConfigService
 	],
 	providers: [CollabGateway, CollabService],
+	exports: [CollabGateway],
 })
 export class CollabModule {}

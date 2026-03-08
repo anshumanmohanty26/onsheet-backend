@@ -22,11 +22,20 @@ export class WorkbooksService {
 	async findOne(id: string, userId: string) {
 		const wb = await this.prisma.workbook.findUnique({
 			where: { id },
-			include: { sheets: { orderBy: { index: "asc" } } },
+			include: {
+				sheets: { orderBy: { index: "asc" } },
+				permissions: { where: { userId }, select: { role: true } },
+			},
 		});
 		if (!wb) throw new NotFoundException("Workbook not found");
-		await this.assertAccess(id, userId);
-		return wb;
+		if (wb.ownerId !== userId && wb.permissions.length === 0) {
+			throw new ForbiddenException("Access denied");
+		}
+		const myRole: PermissionRole | "OWNER" =
+			wb.ownerId === userId ? "OWNER" : wb.permissions[0].role;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { permissions: _p, ...rest } = wb;
+		return { ...rest, myRole };
 	}
 
 	async create(userId: string, dto: CreateWorkbookDto) {

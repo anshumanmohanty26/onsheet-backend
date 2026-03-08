@@ -41,9 +41,10 @@ export class SheetsService {
 	async create(workbookId: string, userId: string, dto: CreateSheetDto) {
 		await this.workbooksService.assertEditor(workbookId, userId);
 		const count = await this.prisma.sheet.count({ where: { workbookId } });
-		return this.prisma.sheet.create({
+		const sheet = await this.prisma.sheet.create({
 			data: { workbookId, name: dto.name ?? `Sheet${count + 1}`, index: count },
 		});
+		return sheet;
 	}
 
 	async update(id: string, userId: string, dto: UpdateSheetDto) {
@@ -53,7 +54,12 @@ export class SheetsService {
 
 	async remove(id: string, userId: string) {
 		await this.assertEditorAccess(id, userId);
-		return this.prisma.sheet.delete({ where: { id } });
+		const sheet = await this.prisma.sheet.findUnique({
+			where: { id },
+			select: { workbookId: true },
+		});
+		await this.prisma.sheet.delete({ where: { id } });
+		return { sheetId: id, workbookId: sheet?.workbookId ?? null };
 	}
 
 	// ── Snapshots ──────────────────────────────────────────────────────────────

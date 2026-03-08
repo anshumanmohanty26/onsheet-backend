@@ -29,7 +29,10 @@ export class PermissionsService {
 	async share(workbookId: string, requesterId: string, dto: ShareDto) {
 		await this.assertOwner(workbookId, requesterId);
 		const target = await this.prisma.user.findUnique({ where: { email: dto.email } });
-		if (!target) throw new NotFoundException(`No OnSheet account found for ${dto.email}. They need to sign up first.`);
+		if (!target)
+			throw new NotFoundException(
+				`No OnSheet account found for ${dto.email}. They need to sign up first.`,
+			);
 		const perm = await this.prisma.permission.upsert({
 			where: { workbookId_userId: { workbookId, userId: target.id } },
 			create: { workbookId, userId: target.id, role: dto.role },
