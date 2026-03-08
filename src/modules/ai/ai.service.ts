@@ -573,9 +573,17 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService, userId: 
 	 *
 	 * Receives the complete message history (user query + all tool results from
 	 * previous planner iterations) and composes a final structured answer.
+	 *
+	 * A trailing HumanMessage is appended so that Vertex AI always has a user
+	 * turn to respond to — without it, a conversation ending in an AIMessage
+	 * causes Gemini to return an empty response.
 	 */
 	const synthesizerNode = async (state: SheetAgentState): Promise<Partial<SheetAgentState>> => {
-		const response = await llm.invoke([new SystemMessage(SYNTHESIZER_SYSTEM), ...state.messages]);
+		const response = await llm.invoke([
+			new SystemMessage(SYNTHESIZER_SYSTEM),
+			...state.messages,
+			new HumanMessage("Compose your final answer for the user now."),
+		]);
 		return { messages: [response] };
 	};
 
