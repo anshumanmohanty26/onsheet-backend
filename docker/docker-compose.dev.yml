@@ -37,11 +37,11 @@ services:
   # ── NestJS API (dev — hot reload via nest start --watch) ──────────────────
   api:
     build:
-      context: .
-      dockerfile: Dockerfile.dev
+      context: ..
+      dockerfile: docker/Dockerfile.dev
     container_name: onsheet_api_dev
     restart: unless-stopped
-    env_file: .env
+    env_file: ../.env
     environment:
       NODE_ENV: development
       DATABASE_URL: postgresql://onsheet:onsheet_pass@postgres:5432/onsheet_db
@@ -49,7 +49,7 @@ services:
       REDIS_PORT: 6379
     volumes:
       # Mount the entire source so file changes trigger hot reload
-      - .:/app
+      - ..:/app
       # Preserve the container's node_modules (don't overwrite with host's)
       - /app/node_modules
       # Preserve generated prisma client

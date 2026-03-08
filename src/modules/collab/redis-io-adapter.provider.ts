@@ -47,8 +47,15 @@ export class RedisIoAdapter extends IoAdapter {
 	}
 
 	/** @inheritdoc */
-	override createIOServer(port: number, options?: ServerOptions) {
-		const server = super.createIOServer(port, options);
+	override createIOServer(port: number, options?: Partial<ServerOptions>) {
+		const mergedOptions = {
+			...options,
+			cors: {
+				origin: true,
+				credentials: true,
+			},
+		};
+		const server = super.createIOServer(port, mergedOptions);
 		server.adapter(this.adapterConstructor);
 		return server;
 	}

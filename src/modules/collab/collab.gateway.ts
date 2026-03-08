@@ -12,7 +12,7 @@ import {
 	WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
-import { ACCESS_COOKIE } from "../../config/cookie.config";
+import { ACCESS_COOKIE, REFRESH_COOKIE } from "../../config/cookie.config";
 import { CellsService } from "../cells/cells.service";
 import { UpdateCellDto } from "../cells/dto/update-cell.dto";
 import { UsersService } from "../users/users.service";
@@ -43,7 +43,7 @@ interface PendingWrite {
 	reject: (e: unknown) => void;
 }
 
-@WebSocketGateway({ cors: { origin: "*" }, namespace: "/collab" })
+@WebSocketGateway({ cors: { origin: true, credentials: true }, namespace: "/collab" })
 export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	@WebSocketServer() server!: Server;
 	private readonly logger = new Logger(CollabGateway.name);
@@ -72,24 +72,46 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		const cookies = parseCookies(client.handshake.headers.cookie as string | undefined);
 		const token = handshakeToken ?? cookies[ACCESS_COOKIE];
 
+		let authenticated = false;
+
+		// Try access token first
 		if (token) {
 			try {
 				const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(token, {
 					secret: this.config.get<string>("jwt.accessSecret"),
 				});
 				const user = await this.usersService.findById(payload.sub);
-				if (!user) {
-					client.disconnect();
-					return;
+				if (user) {
+					const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
+					client.data.user = safe;
+					client.data.isGuest = false;
+					authenticated = true;
 				}
-				const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
-				client.data.user = safe;
-				client.data.isGuest = false;
 			} catch {
-				client.data.isGuest = true;
-				client.data.guestId = `guest_${randomUUID().slice(0, 8)}`;
+				// Access token expired or invalid — fall through to refresh token
 			}
-		} else {
+		}
+
+		// Fall back to refresh token if access token failed
+		if (!authenticated && cookies[REFRESH_COOKIE]) {
+			try {
+				const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(
+					cookies[REFRESH_COOKIE],
+					{ secret: this.config.get<string>("jwt.refreshSecret") },
+				);
+				const user = await this.usersService.findById(payload.sub);
+				if (user?.refreshToken) {
+					const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
+					client.data.user = safe;
+					client.data.isGuest = false;
+					authenticated = true;
+				}
+			} catch {
+				// Refresh token also invalid
+			}
+		}
+
+		if (!authenticated) {
 			client.data.isGuest = true;
 			client.data.guestId = `guest_${randomUUID().slice(0, 8)}`;
 		}
@@ -154,26 +176,34 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		@ConnectedSocket() client: Socket,
 		@MessageBody() payload: { sheetId: string; cell: UpdateCellDto },
 	) {
-		if (client.data.isGuest) {
-			client.emit("collab:error", { message: "Guests cannot edit cells" });
-			return;
-		}
+		try {
+			if (client.data.isGuest) {
+				client.emit("collab:error", { message: "Guests cannot edit cells" });
+				return;
+			}
 
-		const meta = this.socketMeta.get(client.id);
-		if (!meta) return;
-		const userId = client.data.user.id as string;
+			const meta = this.socketMeta.get(client.id);
+			if (!meta) {
+				this.logger.warn(`cell:update from unknown socket ${client.id} — no room metadata`);
+				return;
+			}
+			const userId = client.data.user.id as string;
 
-		// Queue the write into the batch buffer
-		return new Promise((resolve, reject) => {
-			this.enqueueWrite({
-				sheetId: payload.sheetId,
-				userId,
-				dto: payload.cell,
-				clientSocket: client,
-				resolve,
-				reject,
+			// Queue the write into the batch buffer
+			return new Promise((resolve, reject) => {
+				this.enqueueWrite({
+					sheetId: payload.sheetId,
+					userId,
+					dto: payload.cell,
+					clientSocket: client,
+					resolve,
+					reject,
+				});
 			});
-		});
+		} catch (err) {
+			this.logger.error(`cell:update error: ${err instanceof Error ? err.message : err}`);
+			client.emit("collab:error", { message: "Failed to process cell update" });
+		}
 	}
 
 	/** Request cell history for a specific cell (undo/audit). */

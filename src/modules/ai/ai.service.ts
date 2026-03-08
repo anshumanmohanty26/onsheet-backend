@@ -13,12 +13,23 @@ import type { AiQueryDto } from "./dto/ai-query.dto";
 
 // ── Agent result ──────────────────────────────────────────────────────────────
 
+/** A single structured action the frontend should apply after the agent completes. */
+export interface AgentAction {
+	type: "SET_CELLS" | "ADD_COMMENT" | "DELETE_CELLS";
+	/** Cells written / cleared, keyed by A1 ref (e.g. "A1"). */
+	cells?: Record<string, { raw: string; computed?: string; style?: Record<string, unknown> }>;
+	/** Comment content (for ADD_COMMENT). */
+	comment?: { row: number; col: number; content: string };
+}
+
 /** Shape returned by the `POST /ai/agent` endpoint. */
 export interface AgentResult {
 	/** Final answer composed by the synthesizer node. */
 	answer: string;
 	/** Names of every tool the planner node invoked during this run. */
 	toolsUsed: string[];
+	/** Structured actions that were executed on the sheet (frontend should apply these to local state). */
+	actions: AgentAction[];
 }
 
 // ── Graph state ───────────────────────────────────────────────────────────────
@@ -31,10 +42,6 @@ export interface AgentResult {
  */
 const SheetAgentAnnotation = Annotation.Root({
 	...MessagesAnnotation.spec,
-	/**
-	 * Accumulates tool names invoked throughout the agent run.
-	 * Each call to a node that returns tool names is merged via the reducer.
-	 */
 	toolsUsed: Annotation<string[]>({
 		reducer: (existing, incoming) => [...existing, ...incoming],
 		default: () => [],
@@ -46,26 +53,35 @@ type SheetAgentState = typeof SheetAgentAnnotation.State;
 // ── System prompts ────────────────────────────────────────────────────────────
 
 const PLANNER_SYSTEM = [
-	"You are OnSheet AI, an expert spreadsheet analyst embedded in OnSheet — a",
+	"You are OnSheet AI, an expert spreadsheet assistant embedded in OnSheet — a",
 	"collaborative spreadsheet application.",
 	"",
-	"Your role at this stage is to GATHER INFORMATION by calling the appropriate tools.",
-	"Analyse the user query and call every tool needed to answer it accurately.",
-	"NEVER guess or fabricate cell values, formulas, or statistics — use tools.",
+	"You can READ data and WRITE data to the sheet. Analyse the user query and call",
+	"the appropriate tools. NEVER guess or fabricate cell values — use tools.",
 	"",
-	"Available tools:",
+	"READ tools:",
 	"  • get_sheet_cells       — fetch raw cell values and formulas (optional range filter)",
 	"  • get_sheet_statistics  — aggregate counts and grid dimensions",
 	"  • find_formula_errors   — detect #VALUE!, #REF!, #DIV/0! and other error tokens",
 	"  • get_cell_history      — retrieve the full edit log for a specific cell",
 	"  • find_data_anomalies   — detect duplicate values and mixed-type columns",
 	"",
-	"Call as many tools as needed. When you have gathered enough information,",
-	"stop calling tools — the synthesizer will write the final answer.",
+	"WRITE tools:",
+	"  • set_cells             — write values/formulas to one or more cells (bulk)",
+	"  • delete_cells          — clear cell contents in a range",
+	"  • add_comment           — add a comment to a specific cell",
+	"",
+	"When the user asks you to create data, fill cells, generate tables, add formulas,",
+	"or make any change to the sheet, use the WRITE tools to execute those changes.",
+	"When filling data, use 0-indexed row/col for tools. Row 0 col 0 = A1.",
+	"",
+	"Call as many tools as needed. When you have gathered enough information or",
+	"completed the requested changes, stop calling tools — the synthesizer will",
+	"write the final answer.",
 ].join("\n");
 
 const SYNTHESIZER_SYSTEM = [
-	"You are OnSheet AI, an expert spreadsheet analyst.",
+	"You are OnSheet AI, an expert spreadsheet assistant.",
 	"",
 	"Tool results from the previous steps are included in this conversation.",
 	"Your task is to compose a final, clear, actionable answer for the user.",
@@ -75,19 +91,22 @@ const SYNTHESIZER_SYSTEM = [
 	"  • When a formula is broken, show the broken formula and a suggested fix.",
 	"  • Use bullet points or numbered lists for multiple findings.",
 	"  • Be specific and actionable — diagnose root causes, not just symptoms.",
+	"  • If you wrote data to the sheet, summarise what was written and where.",
+	"  • If you added a comment, mention it.",
 	"  • Do not mention tool names or internal steps — speak directly to the user.",
 ].join("\n");
 
 // ── Tool factory ──────────────────────────────────────────────────────────────
 
 /**
- * Creates the five sheet-inspection LangChain tools used by the planner node.
+ * Creates the LangChain tools (read + write) used by the planner node.
  *
- * Tools are pure closures over `prisma` — no class state required.
+ * Write tools include an `_action` field in their JSON result so that
+ * `runAgent` can extract structured actions after the graph completes.
  *
  * @param prisma - Injected Prisma client for live DB access.
  */
-function createSheetTools(prisma: PrismaService) {
+function createSheetTools(prisma: PrismaService, userId: string) {
 	/**
 	 * Fetches raw cell data for a sheet with optional row/column range filtering.
 	 * Capped at 500 cells to stay within the LLM context window.
@@ -326,7 +345,185 @@ function createSheetTools(prisma: PrismaService) {
 		},
 	);
 
-	return [sheetCellsTool, sheetStatsTool, formulaErrorTool, cellHistoryTool, dataAnomalyTool];
+	// ── Helper: convert col index to letter(s) ─────────────────────────────
+	const colToLetter = (c: number): string => {
+		let s = "";
+		let n = c;
+		while (n >= 0) {
+			s = String.fromCharCode((n % 26) + 65) + s;
+			n = Math.floor(n / 26) - 1;
+		}
+		return s;
+	};
+
+	const toA1 = (row: number, col: number) => `${colToLetter(col)}${row + 1}`;
+
+	// ── Write tool: set_cells ──────────────────────────────────────────────
+	const setCellsTool = tool(
+		async ({
+			sheetId,
+			cells,
+		}: {
+			sheetId: string;
+			cells: Array<{ row: number; col: number; value: string }>;
+		}) => {
+			const capped = cells.slice(0, 200);
+			const actionCells: Record<string, { raw: string }> = {};
+
+			for (const c of capped) {
+				const existing = await prisma.cell.findUnique({
+					where: { sheetId_row_col: { sheetId, row: c.row, col: c.col } },
+				});
+				const nextVersion = (existing?.version ?? 0) + 1;
+
+				await prisma.cell.upsert({
+					where: { sheetId_row_col: { sheetId, row: c.row, col: c.col } },
+					create: {
+						sheetId,
+						row: c.row,
+						col: c.col,
+						rawValue: c.value,
+						computed: c.value,
+						version: nextVersion,
+					},
+					update: {
+						rawValue: c.value,
+						computed: c.value,
+						version: nextVersion,
+					},
+				});
+
+				actionCells[toA1(c.row, c.col)] = { raw: c.value };
+			}
+
+			return JSON.stringify({
+				success: true,
+				cellsWritten: capped.length,
+				_action: { type: "SET_CELLS", cells: actionCells } satisfies AgentAction,
+				summary: capped
+					.slice(0, 5)
+					.map((c) => `${toA1(c.row, c.col)}=${c.value}`)
+					.join(", ") + (capped.length > 5 ? ` ... and ${capped.length - 5} more` : ""),
+			});
+		},
+		{
+			name: "set_cells",
+			description:
+				"Write values or formulas to one or more cells. Each cell needs row (0-indexed), col (0-indexed), and value (string — prefix with = for formulas). Max 200 cells per call.",
+			schema: z.object({
+				sheetId: z.string().describe("The sheet ID to write to"),
+				cells: z
+					.array(
+						z.object({
+							row: z.number().int().min(0).describe("Row index (0-indexed)"),
+							col: z.number().int().min(0).describe("Column index (0-indexed)"),
+							value: z.string().describe("Cell value or formula (prefix with = for formulas)"),
+						}),
+					)
+					.min(1)
+					.max(200)
+					.describe("Array of cells to write"),
+			}),
+		},
+	);
+
+	// ── Write tool: delete_cells ───────────────────────────────────────────
+	const deleteCellsTool = tool(
+		async ({
+			sheetId,
+			rowStart,
+			rowEnd,
+			colStart,
+			colEnd,
+		}: {
+			sheetId: string;
+			rowStart: number;
+			rowEnd: number;
+			colStart: number;
+			colEnd: number;
+		}) => {
+			const deleted = await prisma.cell.deleteMany({
+				where: {
+					sheetId,
+					row: { gte: rowStart, lte: rowEnd },
+					col: { gte: colStart, lte: colEnd },
+				},
+			});
+
+			const actionCells: Record<string, { raw: string }> = {};
+			for (let r = rowStart; r <= rowEnd; r++) {
+				for (let c = colStart; c <= colEnd; c++) {
+					actionCells[toA1(r, c)] = { raw: "" };
+				}
+			}
+			return JSON.stringify({
+				success: true,
+				cellsDeleted: deleted.count,
+				_action: { type: "DELETE_CELLS", cells: actionCells } satisfies AgentAction,
+				range: `${toA1(rowStart, colStart)}:${toA1(rowEnd, colEnd)}`,
+			});
+		},
+		{
+			name: "delete_cells",
+			description:
+				"Clear/delete all cells within a rectangular range. All row/col values are 0-indexed and inclusive.",
+			schema: z.object({
+				sheetId: z.string().describe("The sheet ID"),
+				rowStart: z.number().int().min(0).describe("First row (0-indexed, inclusive)"),
+				rowEnd: z.number().int().min(0).describe("Last row (0-indexed, inclusive)"),
+				colStart: z.number().int().min(0).describe("First column (0-indexed, inclusive)"),
+				colEnd: z.number().int().min(0).describe("Last column (0-indexed, inclusive)"),
+			}),
+		},
+	);
+
+	// ── Write tool: add_comment ────────────────────────────────────────────
+	const addCommentTool = tool(
+		async ({
+			sheetId,
+			row,
+			col,
+			content,
+		}: {
+			sheetId: string;
+			row: number;
+			col: number;
+			content: string;
+		}) => {
+			await prisma.cellComment.create({
+				data: { sheetId, row, col, content, createdBy: userId },
+			});
+
+			return JSON.stringify({
+				success: true,
+				_action: { type: "ADD_COMMENT", comment: { row, col, content } } satisfies AgentAction,
+				cell: toA1(row, col),
+				content,
+			});
+		},
+		{
+			name: "add_comment",
+			description:
+				"Add a comment to a specific cell. Row and col are 0-indexed.",
+			schema: z.object({
+				sheetId: z.string().describe("The sheet ID"),
+				row: z.number().int().min(0).describe("Cell row (0-indexed)"),
+				col: z.number().int().min(0).describe("Cell column (0-indexed)"),
+				content: z.string().min(1).max(2000).describe("Comment text"),
+			}),
+		},
+	);
+
+	return [
+		sheetCellsTool,
+		sheetStatsTool,
+		formulaErrorTool,
+		cellHistoryTool,
+		dataAnomalyTool,
+		setCellsTool,
+		deleteCellsTool,
+		addCommentTool,
+	];
 }
 
 // ── Graph factory ─────────────────────────────────────────────────────────────
@@ -351,8 +548,8 @@ function createSheetTools(prisma: PrismaService) {
  * @param llm - Initialised Vertex AI LLM instance.
  * @param prisma - Prisma client for live DB access inside tools.
  */
-function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService) {
-	const tools = createSheetTools(prisma);
+function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService, userId: string) {
+	const tools = createSheetTools(prisma, userId);
 	const llmWithTools = llm.bindTools(tools);
 	const toolsNode = new ToolNode(tools);
 
@@ -405,9 +602,6 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService) {
 		.compile();
 }
 
-/** TypeScript type of the compiled agent graph (inferred from the factory). */
-type AgentGraph = ReturnType<typeof buildSheetAgentGraph>;
-
 // ── Service ───────────────────────────────────────────────────────────────────
 
 /**
@@ -426,7 +620,6 @@ type AgentGraph = ReturnType<typeof buildSheetAgentGraph>;
 export class AiService {
 	private readonly logger = new Logger(AiService.name);
 	private readonly llm: ChatVertexAI;
-	private readonly graph: AgentGraph;
 
 	constructor(
 		private readonly config: ConfigService,
@@ -445,8 +638,6 @@ export class AiService {
 			...(apiKey ? { authOptions: { apiKey } } : {}),
 		});
 
-		// Compile the graph once at startup — it is stateless and safe to reuse.
-		this.graph = buildSheetAgentGraph(this.llm, prisma);
 		this.logger.log(`OnSheet AI agent ready: ${model} @ ${location}`);
 	}
 
@@ -464,10 +655,11 @@ export class AiService {
 	 * @param dto - Agent query payload: sheet ID and user question.
 	 * @returns Final answer string and a deduplicated list of tool names used.
 	 */
-	async runAgent(dto: AgentQueryDto): Promise<AgentResult> {
+	async runAgent(dto: AgentQueryDto, userId: string): Promise<AgentResult> {
 		this.logger.log(`[agent] sheetId=${dto.sheetId} query="${dto.query.slice(0, 80)}"`);
 
-		const result = await this.graph.invoke(
+		const graph = buildSheetAgentGraph(this.llm, this.prisma, userId);
+		const result = await graph.invoke(
 			{
 				messages: [new HumanMessage(`Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`)],
 				toolsUsed: [],
@@ -488,7 +680,19 @@ export class AiService {
 			),
 		];
 
-		return { answer, toolsUsed };
+		// Extract structured actions from write-tool results
+		const actions: AgentAction[] = [];
+		for (const msg of messages) {
+			if (msg._getType() !== "tool") continue;
+			try {
+				const parsed = JSON.parse(typeof msg.content === "string" ? msg.content : "{}");
+				if (parsed._action) actions.push(parsed._action);
+			} catch {
+				// read-only tool or malformed — skip
+			}
+		}
+
+		return { answer, toolsUsed, actions };
 	}
 
 	/**

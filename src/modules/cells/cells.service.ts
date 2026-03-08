@@ -103,13 +103,52 @@ export class CellsService {
 
 	async bulkUpsert(sheetId: string, userId: string, cells: UpdateCellDto[]) {
 		await this.sheetsService.assertEditorAccess(sheetId, userId);
+		if (cells.length === 0) return { count: 0 };
 
-		const results: VersionedCellResult[] = [];
-		for (const dto of cells) {
-			// Each cell goes through the versioned upsert path
-			results.push(await this.upsert(sheetId, userId, dto, "http"));
+		// Batch raw-SQL INSERT … ON CONFLICT for massive speed-up.
+		// Each cell uses 7 params; PostgreSQL supports up to 65 535 params,
+		// so 3 000 cells × 7 = 21 000 params per batch is safe.
+		const BATCH = 3000;
+		let total = 0;
+
+		for (let i = 0; i < cells.length; i += BATCH) {
+			const batch = cells.slice(i, i + BATCH);
+			const params: unknown[] = [];
+			const valueClauses: string[] = [];
+
+			for (const c of batch) {
+				const off = params.length;
+				params.push(
+					sheetId,
+					c.row,
+					c.col,
+					c.rawValue ?? null,
+					c.computed ?? null,
+					c.formatted ?? null,
+					c.style ? JSON.stringify(c.style) : "{}",
+				);
+				valueClauses.push(
+					`(gen_random_uuid()::text, $${off + 1}, $${off + 2}, $${off + 3}, $${off + 4}, $${off + 5}, $${off + 6}, $${off + 7}::jsonb, 1, NOW(), NOW())`,
+				);
+			}
+
+			const sql = `
+				INSERT INTO cells ("id", "sheetId", "row", "col", "rawValue", "computed", "formatted", "style", "version", "createdAt", "updatedAt")
+				VALUES ${valueClauses.join(", ")}
+				ON CONFLICT ("sheetId", "row", "col") DO UPDATE SET
+					"rawValue"  = EXCLUDED."rawValue",
+					"computed"  = EXCLUDED."computed",
+					"formatted" = EXCLUDED."formatted",
+					"style"     = EXCLUDED."style",
+					"version"   = cells."version" + 1,
+					"updatedAt" = NOW()
+			`;
+
+			const affected = await this.prisma.$executeRawUnsafe(sql, ...params);
+			total += Number(affected);
 		}
-		return results;
+
+		return { count: total };
 	}
 
 	async clear(sheetId: string, row: number, col: number, userId: string) {

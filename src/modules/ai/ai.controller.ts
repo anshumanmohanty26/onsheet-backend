@@ -1,5 +1,6 @@
 import { Body, Controller, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
+import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { AiService } from "./ai.service";
 import { AgentQueryDto } from "./dto/agent-query.dto";
 import { AiQueryDto } from "./dto/ai-query.dto";
@@ -23,8 +24,8 @@ export class AiController {
 	 * `POST /ai/agent`
 	 */
 	@Post("agent")
-	runAgent(@Body() dto: AgentQueryDto) {
-		return this.aiService.runAgent(dto);
+	runAgent(@Body() dto: AgentQueryDto, @CurrentUser("id") userId: string) {
+		return this.aiService.runAgent(dto, userId);
 	}
 
 	/**
