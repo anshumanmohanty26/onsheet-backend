@@ -10,10 +10,10 @@ export class WorkbooksService {
 	constructor(private readonly prisma: PrismaService) {}
 
 	async findAllForUser(userId: string) {
+		// Return only workbooks owned by the user.
+		// Workbooks shared with the user are returned separately by sharedWithMe().
 		return this.prisma.workbook.findMany({
-			where: {
-				OR: [{ ownerId: userId }, { permissions: { some: { userId } } }],
-			},
+			where: { ownerId: userId },
 			include: { sheets: { select: { id: true, name: true, index: true } } },
 			orderBy: { createdAt: "desc" },
 		});
@@ -117,7 +117,7 @@ export class WorkbooksService {
 	/** Returns workbooks explicitly shared with the user (not owned by them). */
 	async sharedWithMe(userId: string) {
 		const rows = await this.prisma.permission.findMany({
-			where: { userId },
+			where: { userId, workbook: { ownerId: { not: userId } } },
 			include: {
 				workbook: {
 					include: {
