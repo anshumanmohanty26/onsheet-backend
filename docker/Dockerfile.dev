@@ -4,10 +4,10 @@ RUN npm install -g pnpm
 WORKDIR /app
 
 # Install dependencies layer (cached unless package.json changes)
-COPY package.json ./
+COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
 
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 RUN pnpm prisma generate
 
 # Source is mounted as a volume at runtime — no COPY needed here

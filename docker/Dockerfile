@@ -3,10 +3,10 @@ FROM node:20-alpine AS deps
 RUN npm install -g pnpm
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
 
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 RUN pnpm prisma generate
 
 # ── Stage 2: build ────────────────────────────────────────────────────────────
@@ -26,10 +26,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json ./
+COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
 
-RUN pnpm install --prod
+RUN pnpm install --frozen-lockfile --prod
 RUN pnpm prisma generate
 
 COPY --from=build /app/dist ./dist
