@@ -6,7 +6,6 @@ import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { LoggerModule } from "nestjs-pino";
 import aiConfig from "./config/ai.config";
 import appConfig from "./config/app.config";
-import cloudinaryConfig from "./config/cloudinary.config";
 import databaseConfig from "./config/database.config";
 import jwtConfig from "./config/jwt.config";
 import redisConfig from "./config/redis.config";
@@ -27,7 +26,7 @@ import { PrismaModule } from "./prisma/prisma.module";
 	imports: [
 		ConfigModule.forRoot({
 			isGlobal: true,
-			load: [appConfig, databaseConfig, redisConfig, jwtConfig, aiConfig, cloudinaryConfig],
+			load: [appConfig, databaseConfig, redisConfig, jwtConfig, aiConfig],
 		}),
 		LoggerModule.forRoot({
 			pinoHttp: {

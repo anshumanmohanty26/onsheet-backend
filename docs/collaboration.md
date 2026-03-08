@@ -136,7 +136,7 @@ Cursors are ephemeral. No DB writes. The sequence:
 2. Gateway calls `CollabService.updateCursor(sheetId, socketId, { row, col })`
 3. Gateway broadcasts `cursor:moved { socketId, row, col }` to the room, excluding the mover
 
-Cursor state is stored in `CollabService`'s in-memory `Map` and is lost on server restart.
+Cursor position is persisted inside the user's entry in the Redis presence hash (`presence:room:{sheetId}`) and is cleared when the user leaves (`leave()` deletes their hash field).
 
 ---
 

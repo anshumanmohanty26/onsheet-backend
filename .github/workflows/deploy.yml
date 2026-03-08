@@ -78,9 +78,6 @@ jobs:
             GOOGLE_CLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT }}
             GOOGLE_VERTEX_AI_LOCATION=${{ secrets.GOOGLE_VERTEX_AI_LOCATION }}
             GEMINI_MODEL=${{ secrets.GEMINI_MODEL }}
-            CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
-            CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
-            CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
           flags: >-
             --allow-unauthenticated

@@ -153,12 +153,14 @@ interface ActiveUser {
   userId: string;
   displayName: string;
   socketId: string;
-  color: string;    // one of 8 hex values, cycled by join order
+  color: string;    // one of 8 hex values, deterministically derived from userId hash
   cursor?: { row: number; col: number };
 }
 ```
 
-User colors (cycle in order): `#ef4444` · `#f97316` · `#eab308` · `#22c55e` · `#06b6d4` · `#3b82f6` · `#8b5cf6` · `#ec4899`
+Available colors: `#ef4444` · `#f97316` · `#eab308` · `#22c55e` · `#06b6d4` · `#3b82f6` · `#8b5cf6` · `#ec4899`
+
+Colors are **deterministic per userId** (`hash(userId) % 8`) — the same user always gets the same highlight color across reconnects and server instances.
 
 ---
 
@@ -166,8 +168,8 @@ User colors (cycle in order): `#ef4444` · `#f97316` · `#eab308` · `#22c55e` �
 
 On disconnect:
 
-1. `CollabService.leave(sheetId, socketId)` — removes user from in-memory room map
+1. `CollabService.leave(sheetId, socketId)` — removes user's field from the Redis presence hash; deletes the key if the room is now empty
 2. `user:left { socketId }` broadcast to room
 3. Socket leaves `workbook:{workbookId}` room
 
-Presence state is **in-memory only** — it does not survive server restarts. This is intentional: presence is ephemeral, no DB writes for cursor/online events.
+Presence state is stored in **Redis** (`presence:room:{sheetId}` Hash, 24 h TTL). It survives individual server restarts and is shared across all NestJS instances. Stale rooms auto-expire after 24 h of inactivity.

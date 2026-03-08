@@ -18,9 +18,6 @@
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | — | Path to GCP service account JSON file |
 | `VERTEX_AI_PROJECT` | No | — | GCP project ID |
 | `VERTEX_AI_LOCATION` | No | `us-central1` | Vertex AI region |
-| `CLOUDINARY_CLOUD_NAME` | No | — | Cloudinary cloud (for future export feature) |
-| `CLOUDINARY_API_KEY` | No | — | Cloudinary API key |
-| `CLOUDINARY_API_SECRET` | No | — | Cloudinary API secret |
 
 ---
 

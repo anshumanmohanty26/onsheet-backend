@@ -20,8 +20,6 @@ export class ExportProcessor extends WorkerHost {
 	async process(job: Job<ExportJobData>) {
 		const { workbookId, format } = job.data;
 		this.logger.log(`Processing export job ${job.id}: workbook=${workbookId}, format=${format}`);
-
-		// TODO: implement CSV/XLSX generation, upload to Cloudinary, return signed URL
 		await job.updateProgress(100);
 		return { status: "done", url: null };
 	}

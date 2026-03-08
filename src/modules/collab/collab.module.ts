@@ -6,6 +6,7 @@ import { UsersModule } from "../users/users.module";
 import { CollabGateway } from "./collab.gateway";
 import { CollabService } from "./collab.service";
 import { OperationLogModule } from "./operation-log.module";
+import { redisPresenceProvider } from "./redis-presence.provider";
 
 @Module({
 	imports: [
@@ -15,7 +16,7 @@ import { OperationLogModule } from "./operation-log.module";
 		OperationLogModule,
 		JwtModule.register({}), // secrets resolved at verify-time via ConfigService
 	],
-	providers: [CollabGateway, CollabService],
+	providers: [CollabGateway, CollabService, redisPresenceProvider],
 	exports: [CollabGateway],
 })
 export class CollabModule {}

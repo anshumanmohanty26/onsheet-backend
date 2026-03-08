@@ -11,7 +11,7 @@ flowchart LR
     HTTP["HTTP trigger\n(planned: POST /export\nPOST /import)"]
     HTTP -->|"add job"| BullMQ["BullMQ\n(Redis broker)"]
 
-    BullMQ -->|"export queue"| EP["ExportProcessor\nformat: csv | xlsx\n→ generate file\n→ upload to Cloudinary\n→ return download URL"]
+    BullMQ -->|"export queue"| EP["ExportProcessor\nformat: csv | xlsx\n→ generate file\n→ stream to client"]
 
     BullMQ -->|"import queue"| IP["ImportProcessor\nformat: csv | xlsx\n→ download fileUrl\n→ parse rows\n→ bulk upsert cells"]
 ```
@@ -37,7 +37,7 @@ Both queues connect to the same Redis instance used by the WebSocket adapter and
 **Planned implementation:**
 1. Load all sheets and cells from DB for `workbookId`
 2. Generate CSV or XLSX using a library (e.g. `exceljs`, `papaparse`)
-3. Upload to Cloudinary, return download URL
+3. Stream file directly to the client
 4. Notify user via WebSocket or email
 
 ---

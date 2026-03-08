@@ -10,7 +10,7 @@ import {
 	UnauthorizedException,
 	UseGuards,
 } from "@nestjs/common";
-import { Throttle } from "@nestjs/throttler";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import type { Request as Req, Response } from "express";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { Public } from "../../common/decorators/public.decorator";
@@ -19,6 +19,9 @@ import { RegisterDto } from "./dto/register.dto";
 import { JwtRefreshGuard } from "./guards/jwt-refresh.guard";
 import { LocalAuthGuard } from "./guards/local-auth.guard";
 
+// Brute-force protection on the whole controller, but /me and /logout
+// are exempted below — they are called on every navigation and should
+// only be subject to the generous global default (300 req/min).
 @Throttle({ auth: { limit: 10, ttl: 60_000 } })
 @Controller("auth")
 export class AuthController {
@@ -53,6 +56,7 @@ export class AuthController {
 		this.authService.attachCookies(res, tokens);
 	}
 
+	@SkipThrottle({ auth: true })
 	@HttpCode(HttpStatus.NO_CONTENT)
 	@Post("logout")
 	async logout(@CurrentUser("id") userId: string, @Res({ passthrough: true }) res: Response) {
@@ -60,6 +64,7 @@ export class AuthController {
 		this.authService.clearCookies(res);
 	}
 
+	@SkipThrottle({ auth: true })
 	@Get("me")
 	me(@CurrentUser() user: Express.User) {
 		return user;

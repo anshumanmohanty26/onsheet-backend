@@ -30,7 +30,7 @@ graph TB
 
     subgraph Infra["Infrastructure"]
         PG[("PostgreSQL 16\nPrisma ORM")]
-        Redis[("Redis\n- WS PubSub\n- AI Context\n- BullMQ")]
+        Redis[("Redis\n- WS PubSub\n- Presence (active users)\n- AI Context\n- BullMQ")]
         Vertex["Google Vertex AI\nGemini 2.5 Flash"]
     end
 

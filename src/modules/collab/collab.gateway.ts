@@ -7,6 +7,7 @@ import {
 	MessageBody,
 	type OnGatewayConnection,
 	type OnGatewayDisconnect,
+	type OnGatewayInit,
 	SubscribeMessage,
 	WebSocketGateway,
 	WebSocketServer,
@@ -44,7 +45,7 @@ interface PendingWrite {
 }
 
 @WebSocketGateway({ cors: { origin: true, credentials: true }, namespace: "/collab" })
-export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
 	@WebSocketServer() server!: Server;
 	private readonly logger = new Logger(CollabGateway.name);
 
@@ -67,64 +68,76 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 		private readonly opLog: OperationLogService,
 	) {}
 
+	/**
+	 * Register a Socket.IO middleware that runs BEFORE handleConnection and
+	 * BEFORE any event handlers. This guarantees client.data.user is populated
+	 * by the time sheet:join (emitted immediately on connect) arrives.
+	 * Using handleConnection (async, not awaited by the framework) caused a
+	 * race where sheet:join would see client.data.user === undefined.
+	 */
+	afterInit(server: Server) {
+		server.use(async (client: Socket, next: (err?: Error) => void) => {
+			const handshakeToken = client.handshake.auth?.token as string | undefined;
+			const cookies = parseCookies(client.handshake.headers.cookie as string | undefined);
+			const token = handshakeToken ?? cookies[ACCESS_COOKIE];
+
+			let authenticated = false;
+
+			if (token) {
+				try {
+					const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(token, {
+						secret: this.config.get<string>("jwt.accessSecret"),
+					});
+					const user = await this.usersService.findById(payload.sub);
+					if (user) {
+						const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
+						client.data.user = safe;
+						client.data.isGuest = false;
+						authenticated = true;
+					}
+				} catch {
+					// Access token expired or invalid — fall through to refresh token
+				}
+			}
+
+			if (!authenticated && cookies[REFRESH_COOKIE]) {
+				try {
+					const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(
+						cookies[REFRESH_COOKIE],
+						{ secret: this.config.get<string>("jwt.refreshSecret") },
+					);
+					const user = await this.usersService.findById(payload.sub);
+					if (user?.refreshToken) {
+						const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
+						client.data.user = safe;
+						client.data.isGuest = false;
+						authenticated = true;
+					}
+				} catch {
+					// Refresh token also invalid
+				}
+			}
+
+			if (!authenticated) {
+				client.data.isGuest = true;
+				client.data.guestId = `guest_${randomUUID().slice(0, 8)}`;
+			}
+
+			next();
+		});
+	}
+
 	async handleConnection(client: Socket) {
-		const handshakeToken = client.handshake.auth?.token as string | undefined;
-		const cookies = parseCookies(client.handshake.headers.cookie as string | undefined);
-		const token = handshakeToken ?? cookies[ACCESS_COOKIE];
-
-		let authenticated = false;
-
-		// Try access token first
-		if (token) {
-			try {
-				const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(token, {
-					secret: this.config.get<string>("jwt.accessSecret"),
-				});
-				const user = await this.usersService.findById(payload.sub);
-				if (user) {
-					const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
-					client.data.user = safe;
-					client.data.isGuest = false;
-					authenticated = true;
-				}
-			} catch {
-				// Access token expired or invalid — fall through to refresh token
-			}
-		}
-
-		// Fall back to refresh token if access token failed
-		if (!authenticated && cookies[REFRESH_COOKIE]) {
-			try {
-				const payload = await this.jwtService.verifyAsync<{ sub: string; email: string }>(
-					cookies[REFRESH_COOKIE],
-					{ secret: this.config.get<string>("jwt.refreshSecret") },
-				);
-				const user = await this.usersService.findById(payload.sub);
-				if (user?.refreshToken) {
-					const { passwordHash: _ph, refreshToken: _rt, ...safe } = user;
-					client.data.user = safe;
-					client.data.isGuest = false;
-					authenticated = true;
-				}
-			} catch {
-				// Refresh token also invalid
-			}
-		}
-
-		if (!authenticated) {
-			client.data.isGuest = true;
-			client.data.guestId = `guest_${randomUUID().slice(0, 8)}`;
-		}
-
+		// Auth is resolved in the middleware above; just log the connection.
 		this.logger.log(
 			`Connected: ${client.id} (${client.data.isGuest ? (client.data.guestId as string) : (client.data.user?.email as string)})`,
 		);
 	}
 
-	handleDisconnect(client: Socket) {
+	async handleDisconnect(client: Socket) {
 		const meta = this.socketMeta.get(client.id);
 		if (meta) {
-			this.collabService.leave(meta.sheetId, client.id);
+			await this.collabService.leave(meta.sheetId, client.id);
 			client.to(meta.sheetId).emit("user:left", { socketId: client.id });
 			if (meta.workbookId) {
 				client.leave(`workbook:${meta.workbookId}`);
@@ -144,18 +157,27 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			sinceVersion?: number;
 		},
 	) {
-		const userId: string = client.data.isGuest
-			? (client.data.guestId as string)
-			: (client.data.user?.id as string);
+		// Compute userId — fall back to socket.id so it is NEVER undefined.
+		// If client.data.user?.id is somehow missing (auth timing edge-case)
+		// the socket's own ID is unique and stable for this connection.
+		const rawUserId: string | undefined = client.data.isGuest
+			? (client.data.guestId as string | undefined)
+			: (client.data.user?.id as string | undefined);
+		const userId: string = rawUserId ?? client.id;
 		const displayName: string = client.data.isGuest
 			? (payload.displayName ?? "Guest")
-			: (((client.data.user?.displayName ?? client.data.user?.email) as string) ?? "User");
+			: (((client.data.user?.displayName ?? client.data.user?.email) as string | undefined) ??
+				payload.displayName ??
+				"User");
+		this.logger.log(
+			`handleJoin: socket=${client.id} isGuest=${client.data.isGuest} rawUserId=${rawUserId} userId=${userId} displayName=${displayName}`,
+		);
 
 		client.join(payload.sheetId);
 		if (payload.workbookId) {
 			client.join(`workbook:${payload.workbookId}`);
 		}
-		const users = this.collabService.join(payload.sheetId, {
+		const users = await this.collabService.join(payload.sheetId, {
 			userId,
 			displayName,
 			socketId: client.id,
@@ -166,8 +188,14 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 			userId,
 			displayName,
 		});
-		client.to(payload.sheetId).emit("user:joined", users);
-		client.emit("sheet:users", users);
+		client.to(payload.sheetId).emit(
+			"user:joined",
+			users.filter((u) => !u.userId.startsWith("guest_")),
+		);
+		client.emit(
+			"sheet:users",
+			users.filter((u) => !u.userId.startsWith("guest_")),
+		);
 
 		// Send recent operations so late-joiners can catch up
 		const recentOps = await this.opLog.getRecent(payload.sheetId, 200);
@@ -177,13 +205,13 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	}
 
 	@SubscribeMessage("cursor:move")
-	handleCursor(
+	async handleCursor(
 		@ConnectedSocket() client: Socket,
 		@MessageBody() payload: { row: number; col: number },
 	) {
 		const meta = this.socketMeta.get(client.id);
 		if (!meta) return;
-		this.collabService.updateCursor(meta.sheetId, client.id, payload);
+		await this.collabService.updateCursor(meta.sheetId, client.id, payload);
 		client.to(meta.sheetId).emit("cursor:moved", { socketId: client.id, ...payload });
 	}
 
