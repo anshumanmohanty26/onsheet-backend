@@ -114,6 +114,26 @@ export class WorkbooksService {
 		return wb;
 	}
 
+	/** Returns workbooks explicitly shared with the user (not owned by them). */
+	async sharedWithMe(userId: string) {
+		const rows = await this.prisma.permission.findMany({
+			where: { userId },
+			include: {
+				workbook: {
+					include: {
+						sheets: { select: { id: true, name: true, index: true } },
+						owner: { select: { id: true, email: true, displayName: true, avatarUrl: true } },
+					},
+				},
+			},
+			orderBy: { workbook: { createdAt: "desc" } },
+		});
+		return rows.map((p) => ({
+			...p.workbook,
+			myRole: p.role.toLowerCase() as "viewer" | "editor" | "commenter",
+		}));
+	}
+
 	private async assertOwner(workbookId: string, userId: string) {
 		const wb = await this.prisma.workbook.findUnique({
 			where: { id: workbookId },

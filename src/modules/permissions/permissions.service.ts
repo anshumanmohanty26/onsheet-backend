@@ -12,21 +12,37 @@ export class PermissionsService {
 
 	async findAll(workbookId: string, userId: string) {
 		await this.assertOwner(workbookId, userId);
-		return this.prisma.permission.findMany({
+		const rows = await this.prisma.permission.findMany({
 			where: { workbookId },
 			include: { user: { select: { id: true, email: true, displayName: true, avatarUrl: true } } },
 		});
+		// Flatten to a stable shape the frontend can consume directly
+		return rows.map((p) => ({
+			userId: p.userId,
+			email: p.user.email,
+			name: p.user.displayName ?? p.user.email,
+			avatarUrl: p.user.avatarUrl,
+			role: p.role.toLowerCase() as "viewer" | "editor" | "commenter",
+		}));
 	}
 
 	async share(workbookId: string, requesterId: string, dto: ShareDto) {
 		await this.assertOwner(workbookId, requesterId);
 		const target = await this.prisma.user.findUnique({ where: { email: dto.email } });
-		if (!target) throw new NotFoundException("User not found");
-		return this.prisma.permission.upsert({
+		if (!target) throw new NotFoundException(`No OnSheet account found for ${dto.email}. They need to sign up first.`);
+		const perm = await this.prisma.permission.upsert({
 			where: { workbookId_userId: { workbookId, userId: target.id } },
 			create: { workbookId, userId: target.id, role: dto.role },
 			update: { role: dto.role },
+			include: { user: { select: { id: true, email: true, displayName: true, avatarUrl: true } } },
 		});
+		return {
+			userId: perm.userId,
+			email: perm.user.email,
+			name: perm.user.displayName ?? perm.user.email,
+			avatarUrl: perm.user.avatarUrl,
+			role: perm.role.toLowerCase() as "viewer" | "editor" | "commenter",
+		};
 	}
 
 	async revoke(workbookId: string, targetUserId: string, requesterId: string) {

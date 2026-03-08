@@ -23,6 +23,11 @@ export class WorkbooksController {
 		return this.workbooksService.findByShareToken(shareToken);
 	}
 
+	@Get("shared-with-me")
+	sharedWithMe(@CurrentUser("id") userId: string) {
+		return this.workbooksService.sharedWithMe(userId);
+	}
+
 	@Get(":id/share-info")
 	getShareInfo(@Param("id") id: string, @CurrentUser("id") userId: string) {
 		return this.workbooksService.getShareInfo(id, userId);

@@ -1,15 +1,17 @@
-import type { AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { BaseMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { ChatVertexAI } from "@langchain/google-vertexai";
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import type Redis from "ioredis";
 import { z } from "zod";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { AgentQueryDto } from "./dto/agent-query.dto";
 import type { AiQueryDto } from "./dto/ai-query.dto";
+import { AI_REDIS } from "./ai.constants";
 
 // ── Agent result ──────────────────────────────────────────────────────────────
 
@@ -624,6 +626,22 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService, userId: 
  *  2. `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a service-account JSON.
  *  3. Application Default Credentials (ADC) via `gcloud auth application-default login`.
  */
+// ── Conversation context ─────────────────────────────────────────────────────
+
+/** One stored turn in the per-user conversation history. */
+interface StoredMessage {
+	role: "human" | "ai";
+	content: string;
+}
+
+/** TTL for Redis context keys: 2 hours. Resets on every message. */
+const CONTEXT_TTL_SECONDS = 7200;
+
+/** Maximum human+ai pairs to retain per conversation. Older turns are dropped. */
+const MAX_HISTORY_PAIRS = 10;
+
+// ── Service ───────────────────────────────────────────────────────────────────
+
 @Injectable()
 export class AiService {
 	private readonly logger = new Logger(AiService.name);
@@ -632,6 +650,7 @@ export class AiService {
 	constructor(
 		private readonly config: ConfigService,
 		private readonly prisma: PrismaService,
+		@Inject(AI_REDIS) private readonly redis: Redis,
 	) {
 		const apiKey = config.get<string>("ai.apiKey");
 		const location = config.get<string>("ai.location") ?? "us-central1";
@@ -650,26 +669,65 @@ export class AiService {
 	}
 
 	/**
-	 * Runs the full LangGraph agent for a natural-language spreadsheet query.
-	 *
-	 * Execution flow:
-	 *  1. `planner` calls tools until enough data is gathered.
-	 *  2. `tools` (`ToolNode`) executes each requested tool call.
-	 *  3. `synthesizer` composes the final structured answer.
-	 *
-	 * The recursion limit (15 steps) prevents infinite loops under adversarial
-	 * or ambiguous inputs.
-	 *
-	 * @param dto - Agent query payload: sheet ID and user question.
-	 * @returns Final answer string and a deduplicated list of tool names used.
+	 * Loads the stored conversation history for a context key from Redis.
+	 * Returns an empty array if the key does not exist or Redis is unavailable.
 	 */
+	private async loadContext(key: string): Promise<StoredMessage[]> {
+		try {
+			const raw = await this.redis.get(key);
+			if (!raw) return [];
+			return JSON.parse(raw) as StoredMessage[];
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Appends the latest human+ai turn to the stored history and persists it.
+	 * Silently drops the operation if Redis is unavailable.
+	 * Trims the history to the last {@link MAX_HISTORY_PAIRS} pairs.
+	 */
+	private async saveContext(
+		key: string,
+		existing: StoredMessage[],
+		userContent: string,
+		aiAnswer: string,
+	): Promise<void> {
+		try {
+			const updated: StoredMessage[] = [
+				...existing,
+				{ role: "human", content: userContent },
+				{ role: "ai", content: aiAnswer },
+			];
+			const trimmed = updated.slice(-MAX_HISTORY_PAIRS * 2);
+			await this.redis.set(key, JSON.stringify(trimmed), "EX", CONTEXT_TTL_SECONDS);
+		} catch {
+			// Context persistence is best-effort; never fail the AI response over Redis
+		}
+	}
+
 	async runAgent(dto: AgentQueryDto, userId: string): Promise<AgentResult> {
-		this.logger.log(`[agent] sheetId=${dto.sheetId} query="${dto.query.slice(0, 80)}"`);
+		// Context key is always scoped to the calling user — never shared across users
+		const contextKey = dto.sessionId
+			? `ai:ctx:${userId}:${dto.sessionId}`
+			: `ai:ctx:${userId}:${dto.sheetId}`;
+
+		const history = await this.loadContext(contextKey);
+		this.logger.log(
+			`[agent] sheetId=${dto.sheetId} query="${dto.query.slice(0, 80)}" historyTurns=${history.length / 2}`,
+		);
+
+		// Reconstruct BaseMessage objects from the stored flat history
+		const historyMessages: BaseMessage[] = history.map((m) =>
+			m.role === "human" ? new HumanMessage(m.content) : new AIMessage(m.content),
+		);
+
+		const currentUserContent = `Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`;
 
 		const graph = buildSheetAgentGraph(this.llm, this.prisma, userId);
 		const result = await graph.invoke(
 			{
-				messages: [new HumanMessage(`Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`)],
+				messages: [...historyMessages, new HumanMessage(currentUserContent)],
 				toolsUsed: [],
 			},
 			{ recursionLimit: 15 },
@@ -699,6 +757,9 @@ export class AiService {
 				// read-only tool or malformed — skip
 			}
 		}
+
+		// Persist this turn — keyed per user so different users never share context
+		await this.saveContext(contextKey, history, currentUserContent, answer);
 
 		return { answer, toolsUsed, actions };
 	}
