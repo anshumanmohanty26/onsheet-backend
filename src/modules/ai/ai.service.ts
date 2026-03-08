@@ -83,19 +83,16 @@ const PLANNER_SYSTEM = [
 ].join("\n");
 
 const SYNTHESIZER_SYSTEM = [
-	"You are OnSheet AI, an expert spreadsheet assistant.",
+	"You are OnSheet AI. Reply in 1–4 sentences — never longer.",
 	"",
-	"Tool results from the previous steps are included in this conversation.",
-	"Your task is to compose a final, clear, actionable answer for the user.",
-	"",
-	"Guidelines:",
-	"  • Convert 0-indexed row/col to A1 notation where helpful (row 0, col 0 = A1).",
-	"  • When a formula is broken, show the broken formula and a suggested fix.",
-	"  • Use bullet points or numbered lists for multiple findings.",
-	"  • Be specific and actionable — diagnose root causes, not just symptoms.",
-	"  • If you wrote data to the sheet, summarise what was written and where.",
-	"  • If you added a comment, mention it.",
-	"  • Do not mention tool names or internal steps — speak directly to the user.",
+	"Hard rules:",
+	"  • No preamble. Never start with 'Of course', 'Here is', 'Certainly',",
+	"    'Sure', 'I have', 'Great' or any similar filler. Begin with the answer itself.",
+	"  • Use A1 notation (row 0 col 0 = A1, row 1 col 1 = B2, etc.).",
+	"  • If data was written: state the range and what was written in one sentence.",
+	"  • If a formula is broken: show the broken cell, the formula, and the fix.",
+	"  • If data was analysed: give the key finding only.",
+	"  • Never mention tool names, steps, or internal process.",
 ].join("\n");
 
 // ── Tool factory ──────────────────────────────────────────────────────────────
@@ -550,10 +547,22 @@ function createSheetTools(prisma: PrismaService, userId: string) {
  * @param llm - Initialised Vertex AI LLM instance.
  * @param prisma - Prisma client for live DB access inside tools.
  */
-function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService, userId: string) {
-	const tools = createSheetTools(prisma, userId);
-	const llmWithTools = llm.bindTools(tools);
-	const toolsNode = new ToolNode(tools);
+/** Per-userId cache of bound tool sets. Avoids re-calling llm.bindTools on every request. */
+const toolsCache = new Map<string, { llmWithTools: ReturnType<ChatVertexAI["bindTools"]>; toolsNode: ToolNode }>();
+
+function buildSheetAgentGraph(
+	llm: ChatVertexAI,
+	synthLlm: ChatVertexAI,
+	prisma: PrismaService,
+	userId: string,
+) {
+	let cached = toolsCache.get(userId);
+	if (!cached) {
+		const tools = createSheetTools(prisma, userId);
+		cached = { llmWithTools: llm.bindTools(tools), toolsNode: new ToolNode(tools) };
+		toolsCache.set(userId, cached);
+	}
+	const { llmWithTools, toolsNode } = cached;
 
 	/**
 	 * Planner node — LLM with tools bound.
@@ -581,7 +590,7 @@ function buildSheetAgentGraph(llm: ChatVertexAI, prisma: PrismaService, userId: 
 	 * causes Gemini to return an empty response.
 	 */
 	const synthesizerNode = async (state: SheetAgentState): Promise<Partial<SheetAgentState>> => {
-		const response = await llm.invoke([
+		const response = await synthLlm.invoke([
 			new SystemMessage(SYNTHESIZER_SYSTEM),
 			...state.messages,
 			new HumanMessage("Compose your final answer for the user now."),
@@ -646,6 +655,8 @@ const MAX_HISTORY_PAIRS = 10;
 export class AiService {
 	private readonly logger = new Logger(AiService.name);
 	private readonly llm: ChatVertexAI;
+	/** Dedicated fast LLM for the synthesizer node — always uses flash for low latency. */
+	private readonly synthLlm: ChatVertexAI;
 
 	constructor(
 		private readonly config: ConfigService,
@@ -654,18 +665,27 @@ export class AiService {
 	) {
 		const apiKey = config.get<string>("ai.apiKey");
 		const location = config.get<string>("ai.location") ?? "us-central1";
-		const model = config.get<string>("ai.model") ?? "gemini-2.5-pro";
+		const model = config.get<string>("ai.model") ?? "gemini-2.5-flash";
 		const project = config.get<string>("ai.project");
 
-		this.llm = new ChatVertexAI({
-			model,
+		const baseOpts = {
 			location,
 			temperature: 0,
 			...(project ? { project } : {}),
 			...(apiKey ? { authOptions: { apiKey } } : {}),
+		};
+
+		this.llm = new ChatVertexAI({ model, ...baseOpts });
+
+		// Synthesizer always uses flash — it only needs to summarise, not reason.
+		// maxOutputTokens caps token generation to keep responses brief and fast.
+		this.synthLlm = new ChatVertexAI({
+			model: "gemini-2.5-flash",
+			maxOutputTokens: 400,
+			...baseOpts,
 		});
 
-		this.logger.log(`OnSheet AI agent ready: ${model} @ ${location}`);
+		this.logger.log(`OnSheet AI agent ready — planner: ${model}, synthesizer: gemini-2.5-flash @ ${location}`);
 	}
 
 	/**
@@ -724,7 +744,7 @@ export class AiService {
 
 		const currentUserContent = `Sheet ID: ${dto.sheetId}\n\nQuery: ${dto.query}`;
 
-		const graph = buildSheetAgentGraph(this.llm, this.prisma, userId);
+		const graph = buildSheetAgentGraph(this.llm, this.synthLlm, this.prisma, userId);
 		const result = await graph.invoke(
 			{
 				messages: [...historyMessages, new HumanMessage(currentUserContent)],

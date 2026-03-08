@@ -15,7 +15,7 @@ export default registerAs("ai", () => ({
 	 * Vertex AI Gemini model identifier.
 	 * @see https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models
 	 */
-	model: process.env.GEMINI_MODEL ?? "gemini-2.5-pro",
+	model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
 
 	/** GCP project ID. Required when using API key or service account auth. */
 	project: process.env.GOOGLE_CLOUD_PROJECT ?? process.env.GCLOUD_PROJECT,
